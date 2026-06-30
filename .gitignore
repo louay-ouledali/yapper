@@ -1,0 +1,26 @@
+node_modules
+out
+release
+dist
+*.log
+*.tsbuildinfo
+
+# Playwright
+test-results
+playwright-report
+blob-report
+.DS_Store
+.env
+.env.*
+.vscode/*
+!.vscode/extensions.json
+.idea
+.claude/
+
+# Large bundled model assets — fetched/placed at build time, not committed
+resources/models/
+*.gguf
+*.onnx
+
+# OS
+Thumbs.db

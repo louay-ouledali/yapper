@@ -1,0 +1,36 @@
+appId: com.louayouledali.yapper
+productName: Yapper
+# uiohook-napi and @nut-tree-fork ship prebuilt N-API binaries (ABI-stable across
+# Node/Electron) — don't rebuild from source (would need Visual Studio C++ tools).
+npmRebuild: false
+directories:
+  output: release
+  buildResources: build
+files:
+  - out/**
+  - package.json
+# Native N-API modules: their .node binaries must live outside the asar archive.
+asarUnpack:
+  - "**/node_modules/uiohook-napi/**"
+  - "**/node_modules/@nut-tree-fork/**"
+# Ship the icon as a plain resource so the tray can load it at runtime.
+extraResources:
+  - from: build/icon.png
+    to: icon.png
+win:
+  target: nsis
+  icon: build/icon.png
+  artifactName: ${productName}-Setup-${version}.${ext}
+nsis:
+  oneClick: false
+  perMachine: false
+  allowToChangeInstallationDirectory: true
+  deleteAppDataOnUninstall: false
+  shortcutName: Yapper
+mac:
+  target: dmg
+  icon: build/icon.png
+  category: public.app-category.productivity
+  artifactName: ${productName}-${version}.${ext}
+dmg:
+  title: Yapper ${version}
