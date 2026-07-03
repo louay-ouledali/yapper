@@ -1,6 +1,6 @@
 {
   "name": "yapper",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "Offline, deliberate voice dictation — record in high quality, then AI-clean it into polished text.",
   "author": "Louay Ouledali",
   "private": true,
@@ -20,6 +20,7 @@
     "@nut-tree-fork/nut-js": "^4.2.6",
     "@wllama/wllama": "^3.4.1",
     "@wllama/wllama-compat": "^3.4.1",
+    "loudness": "^0.4.2",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
     "uiohook-napi": "^1.5.5",

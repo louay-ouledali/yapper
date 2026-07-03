@@ -10,9 +10,12 @@ files:
   - out/**
   - package.json
 # Native N-API modules: their .node binaries must live outside the asar archive.
+# loudness ships a Core Audio helper .exe it runs via a __dirname-relative path —
+# it likewise can't execute from inside the asar, so unpack it too.
 asarUnpack:
   - "**/node_modules/uiohook-napi/**"
   - "**/node_modules/@nut-tree-fork/**"
+  - "**/node_modules/loudness/**"
 # Ship the icon as a plain resource so the tray can load it at runtime.
 extraResources:
   - from: build/icon.png

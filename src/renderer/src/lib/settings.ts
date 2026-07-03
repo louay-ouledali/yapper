@@ -31,6 +31,10 @@ export interface YapperSettings {
   autoInsert: boolean
   /** Restore the previous clipboard contents after an auto-insert. */
   restoreClipboard: boolean
+  /** Mute the system speakers while dictating (restored the instant recording ends). */
+  muteWhileDictating: boolean
+  /** Pause playing media (video/music) while dictating, and resume it when recording ends. */
+  pauseMediaWhileDictating: boolean
   /** One-time marker: AI was defaulted ON (on-device) for this install. */
   aiDefaulted?: boolean
   /** One-time marker: the default transcription model was bumped base→small for this install. */
@@ -76,6 +80,8 @@ export const DEFAULT_SETTINGS: YapperSettings = {
   shortcutActivation: 'toggle',
   autoInsert: true,
   restoreClipboard: true,
+  muteWhileDictating: true,
+  pauseMediaWhileDictating: true,
   aiDefaulted: true,
   whisperDefaulted: true
 }

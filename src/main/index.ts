@@ -14,6 +14,7 @@ import {
   llmModelFor
 } from './modelServer'
 import { applyShortcuts, reapply, restartHook, shortcutsHealthy, recordNext, stopHotkeys, type Activation, type BindingLike, type HotkeyActions, type ShortcutLike } from './hotkeys'
+import { duckStart, duckStop, type DuckOpts } from './audioDuck'
 
 const RENDERER_DEV_URL = process.env['ELECTRON_RENDERER_URL']
 
@@ -367,6 +368,10 @@ ipcMain.handle('clipboard:paste', async (_e, text: string, opts?: { restore?: bo
   return { ok: true, pasted: true }
 })
 
+// ── audio ducking (mute speakers + pause media while dictating) ──────────────────
+ipcMain.handle('audio:duckStart', (_e, opts: DuckOpts) => duckStart(opts))
+ipcMain.handle('audio:duckStop', () => duckStop())
+
 // ── overlay control ─────────────────────────────────────────────────────────────
 ipcMain.handle('overlay:hide', () => {
   overlayWin?.hide()
@@ -530,6 +535,7 @@ app.whenReady().then(async () => {
 
 app.on('before-quit', () => {
   quitting = true
+  void duckStop() // never leave the speakers muted / media paused if we quit mid-dictation
 })
 app.on('will-quit', () => stopHotkeys())
 // Keep running in the tray when all windows are closed (the overlay stays hidden but

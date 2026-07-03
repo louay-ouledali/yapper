@@ -92,6 +92,11 @@ export default function Overlay(): JSX.Element {
       await rec.start()
       recRef.current = rec
       setPhase('recording')
+      // Mute the speakers + pause any playing media for the duration of the dictation.
+      void window.yapper?.audioDuckStart({
+        mute: settingsRef.current?.muteWhileDictating ?? true,
+        pauseMedia: settingsRef.current?.pauseMediaWhileDictating ?? true
+      })
       // Cap the recording length — auto-stop + process when the limit is reached.
       const mins = Math.min(30, Math.max(1, settingsRef.current?.maxRecordingMinutes ?? 20))
       limitTimer.current = setTimeout(() => {
@@ -110,6 +115,7 @@ export default function Overlay(): JSX.Element {
     const rec = recRef.current
     if (!rec) return
     clearLimit()
+    void window.yapper?.audioDuckStop() // dictation is over — unmute + resume media now
     recRef.current = null
     const activeMode = modeRef.current
     setPhase('transcribing')
@@ -239,6 +245,7 @@ export default function Overlay(): JSX.Element {
     abortRef.current?.abort()
     clearHide()
     clearLimit()
+    void window.yapper?.audioDuckStop() // restore speakers + media on cancel too
     const settings = settingsRef.current
     const activeMode = modeRef.current
     let audioPath = pendingRef.current?.audioPath

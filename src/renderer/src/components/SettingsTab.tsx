@@ -93,6 +93,19 @@ export default function SettingsTab({ settings: s, setS, ollamaModels, refreshOl
         </section>
 
         <section className="section">
+          <div className="section__title">While dictating</div>
+          <label className="row" style={{ cursor: 'pointer' }}>
+            <input type="checkbox" checked={s.muteWhileDictating} onChange={(e) => setS((c) => ({ ...c, muteWhileDictating: e.target.checked }))} />
+            <span>Mute the speakers while dictating</span>
+          </label>
+          <label className="row" style={{ cursor: 'pointer' }}>
+            <input type="checkbox" checked={s.pauseMediaWhileDictating} onChange={(e) => setS((c) => ({ ...c, pauseMediaWhileDictating: e.target.checked }))} />
+            <span>Pause playing video/music (resume when done)</span>
+          </label>
+          <p className="note">Keeps other audio from bleeding into the mic; both restore the instant you stop. Pause/resume uses the system Play/Pause key (best-effort — most players honor it).</p>
+        </section>
+
+        <section className="section">
           <div className="section__title">Transcription engine</div>
           <div className="field">
             <span className="k">Whisper model</span>

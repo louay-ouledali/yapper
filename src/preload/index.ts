@@ -72,6 +72,9 @@ const api = {
   ): Promise<{ ok: boolean; pasted: boolean; error?: string }> => ipcRenderer.invoke('clipboard:paste', text, opts),
   overlayHide: (): Promise<boolean> => ipcRenderer.invoke('overlay:hide'),
   overlayResize: (h: number): Promise<boolean> => ipcRenderer.invoke('overlay:resize', h),
+  // Mute speakers + pause media while dictating, restore on stop.
+  audioDuckStart: (opts: { mute: boolean; pauseMedia: boolean }): Promise<void> => ipcRenderer.invoke('audio:duckStart', opts),
+  audioDuckStop: (): Promise<void> => ipcRenderer.invoke('audio:duckStop'),
   onDictateToggle: (cb: (modeId: string) => void): (() => void) => {
     const h = (_e: unknown, modeId: string): void => cb(modeId)
     ipcRenderer.on('dictate:toggle', h)
