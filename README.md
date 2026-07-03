@@ -78,7 +78,7 @@ one-time download, then works fully offline:
 | Tier | Model | Engine | Size | Notes |
 | --- | --- | --- | --- | --- |
 | **Standard** | Qwen 2.5 3B | CPU ([wllama](https://github.com/ngxson/wllama), llama.cpp in WASM) | ~1.9 GB | the zero-setup default — smart cleanup that runs on any machine; downloads on first use |
-| **Turbo** | Qwen 2.5 7B | GPU ([web-llm](https://github.com/mlc-ai/web-llm), WebGPU) | ~4.7 GB | noticeably stronger and much faster on a capable GPU |
+| **Turbo** | Qwen 2.5 7B | GPU ([web-llm](https://github.com/mlc-ai/web-llm), WebGPU) | ~5.9 GB | noticeably stronger and much faster on a capable GPU |
 | **Max** | Llama 3.1 8B | GPU (web-llm, WebGPU) | ~6.3 GB | the most capable: best on long transcripts and tricky context |
 
 The **Turbo/Max** GPU tiers need WebGPU; on a machine without a capable GPU they transparently fall back to the

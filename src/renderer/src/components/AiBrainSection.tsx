@@ -214,7 +214,12 @@ export default function AiBrainSection({ brain, onChange, ollamaModels, onRefres
           {isGpuTier && gpuOk === false && (
             <p className="note note--warn">No compatible GPU detected — this tier will run on the Standard CPU model instead.</p>
           )}
-          {localDl.error && <p className="note note--warn">Download failed: {localDl.error}</p>}
+          {localDl.error && (
+            <p className="note note--warn">
+              {isGpuTier ? 'Couldn’t load on the GPU' : 'Download failed'}: {localDl.error}
+              {isGpuTier ? ' — your GPU may not support this model. The Standard (CPU) tier always works.' : ''}
+            </p>
+          )}
         </>
       )}
 

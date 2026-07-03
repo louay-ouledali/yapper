@@ -36,12 +36,15 @@ export const LLM_TIERS: Record<LlmTierId, LlmTier> = {
   },
   turbo: {
     id: 'turbo',
+    // Full-precision (q4f32) build — the q4f16 build needs the WebGPU `shader-f16`
+    // feature, which many Windows/Electron GPU setups don't expose (shaders fail to
+    // compile). q4f32 runs on any WebGPU adapter.
     label: 'Turbo · GPU',
     engine: 'webllm',
-    webllmModel: 'Qwen2.5-7B-Instruct-q4f16_1-MLC',
-    approxMB: 4700,
+    webllmModel: 'Qwen2.5-7B-Instruct-q4f32_1-MLC',
+    approxMB: 5900,
     gpu: true,
-    blurb: 'Qwen2.5 7B on the GPU (WebGPU) — noticeably stronger, cleaner results and much faster than CPU. Needs a capable GPU; otherwise falls back to Standard.'
+    blurb: 'Qwen2.5 7B on the GPU (WebGPU) — noticeably stronger, cleaner results and much faster than CPU. Needs a GPU with enough memory (~6 GB); otherwise falls back to Standard.'
   },
   max: {
     id: 'max',
