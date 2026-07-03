@@ -112,6 +112,7 @@ export default function SettingsTab({ settings: s, setS, ollamaModels, refreshOl
               <option value="wasm">CPU (reliable)</option>
             </select>
           </div>
+          <p className="note">Small &amp; Large are more accurate but need a capable GPU; on a small/absent GPU they run on the CPU (slower) — <strong>Base</strong> is the fastest everywhere. The pill shows which device each dictation actually used.</p>
           <div className="field">
             <span className="k">GPU</span>
             <GpuStatus />
@@ -134,6 +135,21 @@ export default function SettingsTab({ settings: s, setS, ollamaModels, refreshOl
             <input type="checkbox" checked={s.keepAudio} onChange={(e) => setS((c) => ({ ...c, keepAudio: e.target.checked }))} />
             <span>Keep the original audio (lets you replay &amp; re-transcribe)</span>
           </label>
+          <div className="field">
+            <span className="k">Max recording length</span>
+            <span className="set-inline">
+              <input
+                className="input"
+                style={{ width: 90 }}
+                type="number"
+                min={1}
+                max={30}
+                value={s.maxRecordingMinutes}
+                onChange={(e) => setS((c) => ({ ...c, maxRecordingMinutes: Math.min(30, Math.max(1, Math.round(Number(e.target.value) || 1))) }))}
+              />
+              <span className="muted" style={{ fontSize: 12.5 }}>minutes (auto-stops · max 30)</span>
+            </span>
+          </div>
           <div className="field">
             <span className="k">Delete audio after</span>
             <span className="set-inline">

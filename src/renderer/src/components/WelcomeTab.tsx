@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { cleanTranscript, processAudio } from '../lib/dictation'
-import { findMode, modePrompt, removeHistory, updateHistory, type HistoryItem, type YapperSettings } from '../lib/settings'
+import { findMode, modePrompt, modeEffort, removeHistory, updateHistory, type HistoryItem, type YapperSettings } from '../lib/settings'
 
 const fmtTime = (t: number): string => new Date(t).toLocaleString()
 const copy = (t: string): void => void window.yapper?.clipboardWrite(t)
@@ -46,6 +46,7 @@ function HistoryCard({ item, settings, setHistory }: { item: HistoryItem; settin
       device: settings.device,
       language: settings.language,
       prompt: modePrompt(settings, item.mode),
+      effort: modeEffort(settings, item.mode),
       onPhase: (ph) => setBusy(ph)
     }).catch(() => null)
     setBusy('')
@@ -58,7 +59,7 @@ function HistoryCard({ item, settings, setHistory }: { item: HistoryItem; settin
   const reclean = async (modeId: string): Promise<void> => {
     setBusy('cleaning')
     setNote('')
-    const r = await cleanTranscript(item.transcript, settings.brain, modePrompt(settings, modeId))
+    const r = await cleanTranscript(item.transcript, settings.brain, modePrompt(settings, modeId), undefined, { effort: modeEffort(settings, modeId) })
     setBusy('')
     if (r.status === 'off') setNote('AI is off — turn it on in Settings to use this mode.')
     else if (r.status === 'error') setNote(`AI couldn’t run — ${r.error ?? 'check Settings → AI brain'}.`)

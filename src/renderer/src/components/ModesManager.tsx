@@ -1,5 +1,5 @@
 import type { Dispatch, SetStateAction } from 'react'
-import { DEFAULT_MODES, RAW_MODE_ID, type CleanupMode } from '../lib/dictation'
+import { DEFAULT_MODES, RAW_MODE_ID, type CleanupMode, type CleanupEffort } from '../lib/dictation'
 import type { YapperSettings } from '../lib/settings'
 
 const newId = (): string => `mode-${Date.now().toString(36)}`
@@ -11,18 +11,19 @@ export default function ModesManager({ settings, setS }: { settings: YapperSetti
     setS((c) => ({ ...c, modes: c.modes.filter((m) => m.id !== id), defaultModeId: c.defaultModeId === id ? 'clean' : c.defaultModeId }))
   const resetMode = (id: string): void => {
     const def = DEFAULT_MODES.find((m) => m.id === id)
-    if (def) updateMode(id, { label: def.label, prompt: def.prompt })
+    if (def) updateMode(id, { label: def.label, prompt: def.prompt, effort: def.effort })
   }
   const addMode = (): void => patchModes((modes) => [...modes, { id: newId(), label: 'New mode', prompt: '' }])
   const isEdited = (m: CleanupMode): boolean => {
     const def = DEFAULT_MODES.find((d) => d.id === m.id)
-    return !!def && (def.label !== m.label || def.prompt !== m.prompt)
+    return !!def && (def.label !== m.label || def.prompt !== m.prompt || (def.effort ?? 'off') !== (m.effort ?? 'off'))
   }
 
   return (
     <section className="section">
       <div className="section__title">Modes</div>
       <p className="note">A mode is the final form a dictation is delivered in. Pick the default below; each shortcut can use a different mode. Edit the instructions, or add your own. “Raw” returns the untouched transcript.</p>
+      <p className="note">“Thinking” sets how much the model deliberates. <strong>Off is fastest</strong> and best for cleanup; Low/Medium/High only slow things down usefully on reasoning models (Ollama/OpenAI/Claude) — on-device models don’t deliberate.</p>
       <div className="modes">
         {settings.modes.map((m) => {
           const isRaw = m.id === RAW_MODE_ID
@@ -45,14 +46,30 @@ export default function ModesManager({ settings, setS }: { settings: YapperSetti
               {isRaw ? (
                 <p className="note">No AI — copies/inserts the raw transcript as transcribed.</p>
               ) : (
-                <textarea
-                  className="input"
-                  rows={3}
-                  value={m.prompt}
-                  spellCheck={false}
-                  placeholder="Instructions for the AI…"
-                  onChange={(e) => updateMode(m.id, { prompt: e.target.value })}
-                />
+                <>
+                  <textarea
+                    className="input"
+                    rows={3}
+                    value={m.prompt}
+                    spellCheck={false}
+                    placeholder="Instructions for the AI…"
+                    onChange={(e) => updateMode(m.id, { prompt: e.target.value })}
+                  />
+                  <label className="set-inline" style={{ marginTop: 6 }}>
+                    <span className="muted" style={{ fontSize: 12.5 }}>Thinking</span>
+                    <select
+                      className="select"
+                      style={{ width: 'auto' }}
+                      value={m.effort ?? 'off'}
+                      onChange={(e) => updateMode(m.id, { effort: e.target.value as CleanupEffort })}
+                    >
+                      <option value="off">Off · fastest</option>
+                      <option value="low">Low</option>
+                      <option value="medium">Medium</option>
+                      <option value="high">High</option>
+                    </select>
+                  </label>
+                </>
               )}
             </div>
           )

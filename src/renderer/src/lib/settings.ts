@@ -1,7 +1,8 @@
 import { DEFAULT_AI_BRAIN, type AiBrain } from './llm'
+import { normalizeTier } from './llm-shared'
 import { DEFAULT_WHISPER_MODEL, type WhisperDevice } from './whisper'
 import { DEFAULT_SHORTCUTS, DEFAULT_SHOW_OVERLAY, type KeyBinding, type ModeShortcut } from './keybindings'
-import { DEFAULT_MODES, RAW_MODE_ID, type CleanupMode } from './dictation'
+import { DEFAULT_MODES, DEFAULT_EFFORT, RAW_MODE_ID, type CleanupMode, type CleanupEffort } from './dictation'
 
 export interface YapperSettings {
   brain: AiBrain
@@ -17,6 +18,9 @@ export interface YapperSettings {
   retentionDays: number
   /** Keep the original audio recording (lets you replay / re-transcribe later). */
   keepAudio: boolean
+  /** Hard cap on a single recording's length, in minutes. Recording auto-stops and
+   *  processes when reached, so a forgotten recorder can't run unbounded. Clamped 1–30. */
+  maxRecordingMinutes: number
   /** Mode-bound global shortcuts (hold = talk, double-tap = latch). */
   shortcuts: ModeShortcut[]
   /** A shortcut that just reveals the overlay (no recording). */
@@ -29,6 +33,8 @@ export interface YapperSettings {
   restoreClipboard: boolean
   /** One-time marker: AI was defaulted ON (on-device) for this install. */
   aiDefaulted?: boolean
+  /** One-time marker: the default transcription model was bumped base→small for this install. */
+  whisperDefaulted?: boolean
 }
 
 export const WHISPER_MODELS: { id: string; label: string }[] = [
@@ -64,12 +70,14 @@ export const DEFAULT_SETTINGS: YapperSettings = {
   language: 'english',
   retentionDays: 30,
   keepAudio: true,
+  maxRecordingMinutes: 20,
   shortcuts: DEFAULT_SHORTCUTS,
   showOverlayBinding: DEFAULT_SHOW_OVERLAY,
   shortcutActivation: 'toggle',
   autoInsert: true,
   restoreClipboard: true,
-  aiDefaulted: true
+  aiDefaulted: true,
+  whisperDefaulted: true
 }
 
 /** Merge stored modes over the built-in defaults: keep user edits + custom modes, and make
@@ -83,8 +91,8 @@ function mergeModes(stored?: CleanupMode[], legacyPrompts?: Record<string, strin
     for (const m of stored) {
       if (!m || typeof m.id !== 'string') continue
       const base = byId.get(m.id)
-      if (base) byId.set(m.id, { ...base, label: m.label ?? base.label, prompt: m.id === RAW_MODE_ID ? '' : m.prompt ?? base.prompt })
-      else byId.set(m.id, { id: m.id, label: m.label || m.id, prompt: m.prompt || '' }) // custom mode
+      if (base) byId.set(m.id, { ...base, label: m.label ?? base.label, prompt: m.id === RAW_MODE_ID ? '' : m.prompt ?? base.prompt, effort: m.effort ?? base.effort })
+      else byId.set(m.id, { id: m.id, label: m.label || m.id, prompt: m.prompt || '', effort: m.effort }) // custom mode
     }
   }
   return [...byId.values()]
@@ -102,10 +110,19 @@ export async function loadSettings(): Promise<YapperSettings> {
     showOverlayBinding: (s.showOverlayBinding as KeyBinding | null) ?? null
   }
   if (!modes.some((m) => m.id === merged.defaultModeId)) merged.defaultModeId = 'clean'
+  // Coerce a stored/legacy cleanup tier (e.g. old 'floor'/'balanced') to a current one.
+  merged.brain.localTier = normalizeTier(merged.brain.localTier)
+  merged.maxRecordingMinutes = Math.min(30, Math.max(1, Math.round(Number(merged.maxRecordingMinutes) || 20)))
   // One-time: turn AI on (on-device) for installs from before AI defaulted on.
   if (!s.aiDefaulted) {
     merged.brain = { ...merged.brain, enabled: true, provider: 'local' }
     merged.aiDefaulted = true
+  }
+  // One-time: bump the default transcription model base→small (more accurate) for installs
+  // from before that default changed. Respects any explicit non-base model the user chose.
+  if (!s.whisperDefaulted) {
+    if (typeof merged.whisperModel === 'string' && /whisper-base$/i.test(merged.whisperModel)) merged.whisperModel = DEFAULT_WHISPER_MODEL
+    merged.whisperDefaulted = true
   }
   return merged
 }
@@ -120,6 +137,10 @@ export function findMode(settings: YapperSettings, id: string | undefined): Clea
 /** Resolve the prompt for a mode id ('' = raw / no AI). */
 export function modePrompt(settings: YapperSettings, id: string | undefined): string {
   return findMode(settings, id)?.prompt ?? ''
+}
+/** Resolve the thinking budget for a mode id (defaults to 'off' = fastest). */
+export function modeEffort(settings: YapperSettings, id: string | undefined): CleanupEffort {
+  return findMode(settings, id)?.effort ?? DEFAULT_EFFORT
 }
 
 export interface HistoryItem {

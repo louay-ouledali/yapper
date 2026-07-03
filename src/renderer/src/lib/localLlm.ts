@@ -17,14 +17,14 @@
 import { Wllama, type ChatCompletionMessage } from '@wllama/wllama'
 import wasmUrl from '@wllama/wllama/esm/wasm/wllama.wasm?url'
 import type { ChatMessage, ChatResult } from './llm'
-import type { LlmTierId } from './llm-shared'
 
 let wllama: Wllama | null = null
 let loadPromise: Promise<void> | null = null
-let loadedFile = '' // which GGUF is currently resident (so a tier switch reloads)
+let loadedFile = '' // which GGUF is currently resident
 
-async function ensureLoaded(tier: LlmTierId = 'floor'): Promise<void> {
-  const status = await window.yapper?.localModelStatus(tier)
+// The CPU tier ('standard') has a single GGUF; the bigger GPU tiers run on web-llm.
+async function ensureLoaded(): Promise<void> {
+  const status = await window.yapper?.localModelStatus('standard')
   if (!status?.installed || !status.url) {
     throw new Error('On-device model not installed — download it in Settings → AI brain')
   }
@@ -49,9 +49,9 @@ async function ensureLoaded(tier: LlmTierId = 'floor'): Promise<void> {
         // Point it at the copy we serve over loopback so it loads locally instead.
         const base = status.url.slice(0, status.url.lastIndexOf('/'))
         inst.setCompat({ worker: `${base}/wllama-compat/wllama.js`, wasm: `${base}/wllama-compat/wllama.wasm` })
-        // Half the logical cores (min 2, max 8): enough to saturate a small model
-        // without starving the UI thread or the whisper worker on big machines.
-        const nThreads = Math.max(2, Math.min(8, Math.floor((navigator.hardwareConcurrency || 4) / 2)))
+        // Most of the logical cores (min 2, max 8): cleanup runs after transcription, so
+        // the CPU is free — give the model threads to work with, leaving one for the UI.
+        const nThreads = Math.max(2, Math.min(8, (navigator.hardwareConcurrency || 4) - 1))
         await inst.loadModelFromUrl(status.url, { n_ctx: 4096, n_threads: nThreads })
         wllama = inst
         loadedFile = status.file
@@ -65,9 +65,9 @@ async function ensureLoaded(tier: LlmTierId = 'floor'): Promise<void> {
 
 /** Run a chat completion fully on-device. Returns a clear error if the model
  * isn't downloaded yet or the engine fails to start. */
-export async function localChat(messages: ChatMessage[], temperature: number, tier: LlmTierId = 'floor'): Promise<ChatResult> {
+export async function localChat(messages: ChatMessage[], temperature: number): Promise<ChatResult> {
   try {
-    await ensureLoaded(tier)
+    await ensureLoaded()
     if (!wllama) return { ok: false, text: '', error: 'on-device model unavailable' }
     const res = await wllama.createChatCompletion({
       messages: messages as ChatCompletionMessage[],
@@ -93,11 +93,10 @@ export async function localChatStream(
   temperature: number,
   onToken: (text: string) => void,
   signal?: AbortSignal,
-  maxTokens = 320,
-  tier: LlmTierId = 'floor'
+  maxTokens = 320
 ): Promise<ChatResult> {
   try {
-    await ensureLoaded(tier)
+    await ensureLoaded()
     if (!wllama) return { ok: false, text: '', error: 'on-device model unavailable' }
     const stream = await wllama.createChatCompletion({
       messages: messages as ChatCompletionMessage[],

@@ -1,13 +1,13 @@
 /**
  * The AI-brain (cleanup) settings — provider (on-device / Ollama / OpenAI),
  * endpoint, key, model picker, a real "Test connection" with a status lamp, and
- * on-device model management (Compact CPU download + Balanced GPU warm-up).
- * Adapted from StagePilot's AiBrainSection for Yapper's single-model cleanup use.
+ * on-device model management across two engines: the Standard CPU model (wllama,
+ * downloaded via main) and the Turbo/Max GPU models (web-llm, prepared in-renderer).
  */
 import { useEffect, useState } from 'react'
 import { brainIsCloud, hostOf, isCloudModel, type AiBrain } from '../lib/llm'
 import { connTone, testConnection, type ConnResult } from '../lib/llm-conn'
-import { LLM_TIERS, type LlmTierId } from '../lib/llm-shared'
+import { LLM_TIERS, normalizeTier, type LlmTierId } from '../lib/llm-shared'
 
 const fmtMB = (mb: number): string => (mb >= 1000 ? `${(mb / 1000).toFixed(1)} GB` : `${mb} MB`)
 const TONE_LAMP: Record<ReturnType<typeof connTone>, string> = { ok: 'lamp--ok', warn: 'lamp--warn', err: 'lamp--err', idle: '' }
@@ -25,13 +25,37 @@ export default function AiBrainSection({ brain, onChange, ollamaModels, onRefres
   const [conn, setConn] = useState<{ busy: boolean; res?: ConnResult }>({ busy: false })
   const [localReady, setLocalReady] = useState(false)
   const [localDl, setLocalDl] = useState<{ pct: number; busy: boolean; error?: string }>({ pct: 0, busy: false })
-  const tier = brain.localTier ?? 'floor'
+  const [gpuOk, setGpuOk] = useState<boolean | null>(null)
+  const tier = normalizeTier(brain.localTier)
+  const tierDef = LLM_TIERS[tier]
+  const isGpuTier = tierDef.engine === 'webllm'
+  // The engine that will actually run: a GPU tier without a GPU falls back to Standard (CPU).
+  const usingGpu = isGpuTier && gpuOk === true
+  const effTier = usingGpu ? tierDef : LLM_TIERS.standard
 
-  // Re-check install state whenever the selected tier changes (each tier is its own file).
+  // Re-check readiness whenever the selected tier changes. GPU tiers probe WebGPU +
+  // the web-llm cache; otherwise (incl. GPU-tier fallback) check the CPU 'standard' model.
   useEffect(() => {
     let alive = true
     setLocalDl({ pct: 0, busy: false })
-    void window.yapper?.localModelStatus(tier).then((st) => alive && setLocalReady(Boolean(st?.installed)))
+    setGpuOk(null)
+    void (async () => {
+      let gpu = false
+      if (tierDef.engine === 'webllm') {
+        const { webLlmAvailable } = await import('../lib/webLlm')
+        gpu = await webLlmAvailable()
+        if (alive) setGpuOk(gpu)
+      }
+      if (tierDef.engine === 'webllm' && gpu && tierDef.webllmModel) {
+        const { webLlmHasModel } = await import('../lib/webLlm')
+        const has = await webLlmHasModel(tierDef.webllmModel)
+        if (alive) setLocalReady(has)
+      } else {
+        const st = await window.yapper?.localModelStatus('standard')
+        if (alive) setLocalReady(Boolean(st?.installed))
+      }
+    })()
+    // wllama (CPU) downloads report progress over IPC; web-llm reports via its own callback.
     const off = window.yapper?.onLocalModelProgress?.((p) => {
       const d = p as { pct?: number; done?: boolean; error?: string }
       if (d.error) setLocalDl({ busy: false, pct: 0, error: d.error })
@@ -44,11 +68,24 @@ export default function AiBrainSection({ brain, onChange, ollamaModels, onRefres
       alive = false
       off?.()
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [tier])
 
-  const downloadLocal = (): void => {
+  const downloadLocal = async (): Promise<void> => {
     setLocalDl({ busy: true, pct: 0, error: undefined })
-    void window.yapper?.localModelDownload(tier)
+    if (usingGpu && tierDef.webllmModel) {
+      try {
+        const { webLlmPrepare } = await import('../lib/webLlm')
+        await webLlmPrepare(tierDef.webllmModel, (pct) => setLocalDl({ busy: true, pct }))
+        setLocalDl({ busy: false, pct: 100 })
+        setLocalReady(true)
+      } catch (e) {
+        setLocalDl({ busy: false, pct: 0, error: (e as Error).message })
+      }
+      return
+    }
+    // CPU 'standard' model (also the fallback when a GPU tier has no GPU) — progress via IPC listener.
+    void window.yapper?.localModelDownload('standard')
   }
   const runTest = (): void => {
     setConn({ busy: true })
@@ -153,28 +190,30 @@ export default function AiBrainSection({ brain, onChange, ollamaModels, onRefres
               className="select"
               value={tier}
               onChange={(e) => patch({ localTier: e.target.value as LlmTierId })}
-              title="Both models run fully on this machine (CPU). Balanced is larger but cleans up noticeably better."
+              title="Standard runs on the CPU (any machine). Turbo and Max run on the GPU (WebGPU) — bigger, smarter models."
             >
-              <option value="floor">
-                {LLM_TIERS.floor.label} · Qwen 0.5B (~{fmtMB(LLM_TIERS.floor.approxMB)})
-              </option>
-              <option value="balanced">
-                {LLM_TIERS.balanced.label} · Qwen 1.5B (~{fmtMB(LLM_TIERS.balanced.approxMB)})
-              </option>
+              {Object.values(LLM_TIERS).map((t) => (
+                <option key={t.id} value={t.id}>
+                  {t.label} (~{fmtMB(t.approxMB)})
+                </option>
+              ))}
             </select>
           </div>
           <div className="field">
             <span className="k">Status</span>
             <span className="set-inline">
-              <span className="muted" style={{ fontSize: 12.5 }}>{localReady ? 'Installed ✓' : 'Not installed'}</span>
+              <span className="muted" style={{ fontSize: 12.5 }}>{localReady ? 'Ready ✓' : usingGpu ? 'Not downloaded' : `${effTier.label} not downloaded`}</span>
               {!localReady && (
-                <button className="chip" disabled={localDl.busy} onClick={downloadLocal}>
-                  {localDl.busy ? `Downloading… ${localDl.pct}%` : `Download (~${fmtMB(LLM_TIERS[tier].approxMB)})`}
+                <button className="chip" disabled={localDl.busy} onClick={() => void downloadLocal()}>
+                  {localDl.busy ? `Downloading… ${localDl.pct}%` : `Download (~${fmtMB(effTier.approxMB)})`}
                 </button>
               )}
             </span>
           </div>
-          <p className="note">{LLM_TIERS[tier].blurb}</p>
+          <p className="note">{tierDef.blurb}</p>
+          {isGpuTier && gpuOk === false && (
+            <p className="note note--warn">No compatible GPU detected — this tier will run on the Standard CPU model instead.</p>
+          )}
           {localDl.error && <p className="note note--warn">Download failed: {localDl.error}</p>}
         </>
       )}

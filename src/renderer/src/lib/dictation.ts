@@ -14,6 +14,12 @@ export type DictationMode = string
 /** The id of the built-in "no AI" mode (returns the untouched transcript). */
 export const RAW_MODE_ID = 'raw'
 
+/** How much the model may "think" before answering. Off = fastest (greedy, no
+ *  reasoning) — the right default for cleanup. Higher levels only do something on
+ *  reasoning-capable models (Ollama/OpenAI/Claude); on-device models don't deliberate. */
+export type CleanupEffort = 'off' | 'low' | 'medium' | 'high'
+export const DEFAULT_EFFORT: CleanupEffort = 'off'
+
 /** A delivery/cleanup mode: the final form the dictation is turned into. An empty `prompt`
  *  means "no AI" (raw). `builtin` modes can be edited & reset but not deleted. */
 export interface CleanupMode {
@@ -21,6 +27,8 @@ export interface CleanupMode {
   label: string
   prompt: string
   builtin?: boolean
+  /** Per-mode thinking budget (defaults to 'off' = fastest). */
+  effort?: CleanupEffort
 }
 
 /** Shared tail appended to every mode prompt to keep output clean and proportional. */
@@ -33,7 +41,7 @@ export const DEFAULT_MODES: CleanupMode[] = [
     label: 'Clean-up',
     builtin: true,
     prompt:
-      'Clean up this dictation: remove filler words (um, uh, ah, like), false starts, stutters and accidentally repeated words. When the speaker corrects themselves or contradicts what they just said, keep only the corrected, final version. Fix grammar, capitalization and punctuation, and fix words that are clearly mis-transcribed using the context. Preserve the speaker’s meaning, tone and wording — do not add new content.'
+      'Clean up this dictation. Remove speech disfluencies only: filler words (um, uh, ah, er, like, you know), false starts, and immediate stutters where a word or fragment is accidentally repeated back-to-back (e.g. "the- the the meeting" → "the meeting"). Do NOT remove words that were said on purpose: keep intentional repetition and emphasis exactly as spoken (e.g. "very very important", "no no no", or a word listed or repeated deliberately like "test, test, test"). Never delete a whole meaningful word or phrase unless it is clearly a filler or an accidental back-to-back stutter — when unsure, keep it. When the speaker clearly corrects themselves, keep only the corrected final version. Fix grammar, capitalization and punctuation, and fix words that are obviously mis-transcribed using the context. Preserve the speaker’s meaning, tone, wording and every distinct point — do not add, summarize, or drop content.'
   },
   {
     id: 'prompt',
@@ -99,21 +107,94 @@ export interface CleanOutcome {
   error?: string
 }
 
+/** Longest input we send to the model in one pass. A long dictation is split into
+ *  several of these so the cleanup output is never truncated by the token cap /
+ *  context window (the bug where long recordings lost their latter parts). ~3500
+ *  chars ≈ ~900 tokens in, leaving ample room for the reply within a 4k context. */
+const CLEAN_CHUNK_CHARS = 3500
+
+/** Split a transcript into cleanup-sized chunks on sentence boundaries (greedy pack).
+ *  A single over-long sentence is hard-split on whitespace so nothing is dropped. */
+export function splitForCleanup(text: string, maxChars = CLEAN_CHUNK_CHARS): string[] {
+  const t = text.trim()
+  if (t.length <= maxChars) return t ? [t] : []
+  const parts = t.match(/[^.!?…]*[.!?…]+["'”’)\]]*\s*|[^.!?…]+$/g) ?? [t]
+  const chunks: string[] = []
+  let cur = ''
+  const flush = (): void => {
+    const s = cur.trim()
+    if (s) chunks.push(s)
+    cur = ''
+  }
+  for (const part of parts) {
+    if (cur && cur.length + part.length > maxChars) flush()
+    if (part.length > maxChars) {
+      flush()
+      let rest = part
+      while (rest.length > maxChars) {
+        let cut = rest.lastIndexOf(' ', maxChars)
+        if (cut < maxChars * 0.6) cut = maxChars
+        chunks.push(rest.slice(0, cut).trim())
+        rest = rest.slice(cut)
+      }
+      cur = rest
+    } else {
+      cur += part
+    }
+  }
+  flush()
+  return chunks
+}
+
+/** Token budget for a chunk's reply: cleanup is ~length-preserving, so allow the
+ *  chunk's own size plus headroom, capped so we never blow past the context window. */
+const cleanupBudget = (chunkChars: number): number => Math.min(1400, Math.max(320, Math.ceil((chunkChars / 4) * 1.5) + 96))
+
+/** Options for a cleanup pass: the mode's thinking budget and a live-token sink. */
+export interface CleanOpts {
+  /** Per-mode thinking budget (defaults to 'off' = fastest, greedy). */
+  effort?: CleanupEffort
+  /** Receives cleaned text as it streams, so the UI can paint it live. */
+  onToken?: (text: string) => void
+}
+
 /** Run an AI cleanup pass over a transcript with a resolved prompt, reporting WHAT happened.
+ *  Long transcripts are cleaned in chunks and re-joined so nothing is dropped or truncated.
  *  Falls back to the raw transcript for raw mode / disabled brain / errors — but says so. */
-export async function cleanTranscript(transcript: string, brain: AiBrain, prompt?: string, signal?: AbortSignal): Promise<CleanOutcome> {
+export async function cleanTranscript(transcript: string, brain: AiBrain, prompt?: string, signal?: AbortSignal, opts: CleanOpts = {}): Promise<CleanOutcome> {
   if (!transcript.trim()) return { text: transcript, status: 'empty' }
   if (!prompt || !prompt.trim()) return { text: transcript, status: 'raw' }
   if (!brain.enabled) return { text: transcript, status: 'off' }
+  const effort = opts.effort ?? DEFAULT_EFFORT
+  // Cleanup is a mechanical edit, not a puzzle: 'off' runs greedy (temp 0) for the
+  // fastest, most deterministic reply. Higher efforts respect the brain's temperature.
+  const temperature = effort === 'off' ? 0 : brain.temperature
   try {
-    // assistStream (vs assist) lets a cancel abort the pass mid-generation via the signal.
-    const res = await assistStream(brainToLlmConfig(brain, 'live'), cleanupMessages(transcript, prompt), () => {}, signal)
-    if (res.ok && res.text) {
-      const cleaned = stripModelArtifacts(res.text)
-      if (cleaned) return { text: cleaned, status: 'ok' }
-      return { text: transcript, status: 'error', error: 'AI returned an empty reply' }
+    const cfg = brainToLlmConfig(brain, 'live')
+    const chunks = splitForCleanup(transcript)
+    const out: string[] = []
+    for (let i = 0; i < chunks.length; i++) {
+      if (signal?.aborted) break
+      if (i > 0) opts.onToken?.('\n\n') // visual break between streamed chunks
+      // assistStream (vs assist) lets a cancel abort the pass mid-generation via the signal.
+      const res = await assistStream(cfg, cleanupMessages(chunks[i], prompt), opts.onToken ?? (() => {}), signal, {
+        maxTokens: cleanupBudget(chunks[i].length),
+        effort,
+        temperature
+      })
+      if (res.ok) {
+        const cleaned = stripModelArtifacts(res.text)
+        // Never lose a segment: if the model returned nothing usable for this chunk, keep the raw chunk.
+        out.push(cleaned || chunks[i])
+      } else {
+        // A real engine/transport error: report it and fall back to the whole raw transcript.
+        return { text: transcript, status: 'error', error: res.error || 'AI returned nothing' }
+      }
     }
-    return { text: transcript, status: 'error', error: res.error || 'AI returned nothing' }
+    if (signal?.aborted) return { text: transcript, status: 'error', error: 'cancelled' }
+    const joined = out.join(chunks.length > 1 ? '\n\n' : '').trim()
+    if (joined) return { text: joined, status: 'ok' }
+    return { text: transcript, status: 'error', error: 'AI returned an empty reply' }
   } catch (e) {
     return { text: transcript, status: 'error', error: (e as Error).message }
   }
@@ -248,8 +329,12 @@ export interface ProcessOpts {
   onPhase?: (phase: 'transcribing' | 'cleaning') => void
   /** Whisper model download/load progress (0–100), fired only while a model loads. */
   onModelProgress?: (pct: number) => void
-  /** The device the transcriber actually settled on (GPU may fall back to CPU). */
-  onDevice?: (device: 'webgpu' | 'wasm') => void
+  /** The device the transcriber settled on, and whether it wanted GPU but fell back to CPU. */
+  onDevice?: (device: 'webgpu' | 'wasm', downgraded: boolean) => void
+  /** The chosen mode's thinking budget (defaults to 'off' = fastest). */
+  effort?: CleanupEffort
+  /** Cleaned text as it streams, so the overlay can paint it live. */
+  onCleanToken?: (text: string) => void
   /** Abort the AI cleanup pass (the transcription itself can't be interrupted mid-decode). */
   signal?: AbortSignal
 }
@@ -270,6 +355,6 @@ export async function processAudio(blob: Blob, opts: ProcessOpts): Promise<Dicta
   if (!opts.prompt || !opts.prompt.trim()) return { transcript, cleaned: transcript, status: 'raw' }
   if (!opts.brain.enabled) return { transcript, cleaned: transcript, status: 'off' }
   opts.onPhase?.('cleaning')
-  const r = await cleanTranscript(transcript, opts.brain, opts.prompt, opts.signal)
+  const r = await cleanTranscript(transcript, opts.brain, opts.prompt, opts.signal, { effort: opts.effort, onToken: opts.onCleanToken })
   return { transcript, cleaned: r.text, status: r.status, error: r.error }
 }

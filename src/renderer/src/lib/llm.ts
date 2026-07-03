@@ -14,6 +14,7 @@
  * script. The 'local' provider never touches the network.
  */
 import { DEFAULT_LLM_TIER, type LlmTierId } from './llm-shared'
+import type { CleanupEffort } from './dictation'
 
 export type LlmProvider = 'local' | 'openai' | 'ollama'
 
@@ -24,8 +25,8 @@ export interface LlmConfig {
   apiKey: string
   model: string
   temperature: number
-  /** On-device engine tier: 'floor' (wllama CPU) or 'balanced' (WebGPU).
-   *  'balanced' silently falls back to the floor when no GPU is available. */
+  /** On-device engine tier: 'standard' (wllama CPU) or 'turbo'/'max' (web-llm GPU).
+   *  The GPU tiers silently fall back to 'standard' when no capable GPU is available. */
   localTier: LlmTierId
 }
 
@@ -36,7 +37,7 @@ export const DEFAULT_LLM: LlmConfig = {
   apiKey: '',
   model: 'llama3.1',
   temperature: 0.4,
-  localTier: 'floor'
+  localTier: DEFAULT_LLM_TIER
 }
 
 /**
@@ -58,7 +59,7 @@ export interface AiBrain {
   baseUrl: string
   /** OpenAI-compatible key. */
   apiKey: string
-  /** On-device engine tier ('floor' | 'balanced'). */
+  /** On-device engine tier ('standard' | 'turbo' | 'max'). */
   localTier: LlmTierId
   /** Fast model name (assist + Q&A live answers) — Ollama/OpenAI. */
   liveModel: string
@@ -69,8 +70,8 @@ export interface AiBrain {
 
 export type BrainRole = 'live' | 'deep'
 
-/** Default brain: AI ON, running fully on-device (zero setup) — first use downloads a small
- *  ~400 MB model once. Users can switch to Ollama / OpenAI in Settings. */
+/** Default brain: AI ON, running fully on-device (zero setup) — first use downloads the
+ *  ~1.9 GB Standard CPU model once. Users can switch to a GPU tier, Ollama or OpenAI in Settings. */
 export const DEFAULT_AI_BRAIN: AiBrain = {
   enabled: true,
   provider: 'local',
@@ -102,7 +103,7 @@ export function brainToLlmConfig(b: AiBrain, role: BrainRole = 'live'): LlmConfi
 
 /** Build an enabled Ollama config for an explicit model (Q&A live/deep + fallback). */
 export function ollamaConfig(baseUrl: string, model: string): LlmConfig {
-  return { enabled: true, provider: 'ollama', baseUrl, apiKey: '', model, temperature: 0, localTier: 'floor' }
+  return { enabled: true, provider: 'ollama', baseUrl, apiKey: '', model, temperature: 0, localTier: 'standard' }
 }
 
 /** An Ollama model that runs in Ollama's CLOUD (e.g. `gpt-oss:120b-cloud`). */
@@ -127,6 +128,9 @@ export interface RequestShapeOpts {
   stream?: boolean
   /** Token cap (Ollama num_predict / OpenAI max_tokens). */
   maxTokens?: number
+  /** Per-task thinking budget → Ollama `think` level / OpenAI `reasoning_effort`.
+   *  'off' (default) disables reasoning for the fastest reply. */
+  effort?: CleanupEffort
 }
 
 /** Build the URL + request init for a chat completion (pure). */
@@ -137,6 +141,7 @@ export function llmRequestShape(
 ): { url: string; init: LlmHttpInit } {
   const headers: Record<string, string> = { 'Content-Type': 'application/json' }
   const stream = !!opts.stream
+  const effort = opts.effort ?? 'off'
   if (cfg.provider === 'openai') {
     if (cfg.apiKey) headers['Authorization'] = `Bearer ${cfg.apiKey}`
     return {
@@ -149,7 +154,10 @@ export function llmRequestShape(
           messages,
           temperature: cfg.temperature,
           stream,
-          ...(opts.maxTokens ? { max_tokens: opts.maxTokens } : {})
+          ...(opts.maxTokens ? { max_tokens: opts.maxTokens } : {}),
+          // Only send reasoning_effort when the user explicitly asks for thinking —
+          // non-reasoning models reject the field, so 'off' omits it entirely.
+          ...(effort !== 'off' ? { reasoning_effort: effort } : {})
         })
       }
     }
@@ -159,12 +167,12 @@ export function llmRequestShape(
     init: {
       method: 'POST',
       headers,
-      // think:false → direct answers from hybrid/reasoning models (real-time Q&A).
+      // think:false → direct answers (fastest); a level string asks a reasoning model to deliberate.
       body: JSON.stringify({
         model: cfg.model,
         messages,
         stream,
-        think: false,
+        think: effort === 'off' ? false : effort,
         options: { temperature: cfg.temperature, ...(opts.maxTokens ? { num_predict: opts.maxTokens } : {}) }
       })
     }
@@ -271,6 +279,10 @@ export async function assist(cfg: LlmConfig, messages: ChatMessage[]): Promise<C
 export interface AssistStreamOpts {
   /** Generation cap — short surfaces (Q&A cards) finish much faster with ~160. */
   maxTokens?: number
+  /** Thinking budget (Ollama `think` / OpenAI `reasoning_effort`); 'off' = fastest. */
+  effort?: CleanupEffort
+  /** Override cfg.temperature for this call (e.g. 0 = greedy for fast, deterministic cleanup). */
+  temperature?: number
 }
 
 export async function assistStream(
@@ -282,22 +294,25 @@ export async function assistStream(
 ): Promise<ChatResult> {
   if (!cfg.enabled) return { ok: false, text: '', error: 'AI assist is off' }
   const maxTokens = opts.maxTokens ?? 320
+  const temperature = opts.temperature ?? cfg.temperature
   if (cfg.provider === 'local') {
     try {
-      // One on-device engine (wllama) for both tiers — the tier just selects which
-      // GGUF to load. Lazy import: wllama bundles a heavyweight WASM runtime.
-      const { localChatStream } = await import('./localLlm')
-      return await localChatStream(messages, cfg.temperature, onToken, signal, maxTokens, cfg.localTier)
+      // The tier selects the engine: wllama (CPU) for 'standard', web-llm (GPU) for
+      // the bigger tiers — with a CPU fallback. Lazy import: both runtimes are heavy.
+      // (On-device models don't reason, so `effort` only affects the temperature here.)
+      const { localAssistStream } = await import('./localEngine')
+      return await localAssistStream(messages, temperature, onToken, signal, maxTokens, cfg.localTier)
     } catch (e) {
       return { ok: false, text: '', error: (e as Error).message }
     }
   }
   // Remote (Ollama / OpenAI): stream token-by-token through the main proxy so
-  // cloud answers paint live.
+  // cloud answers paint live. Temperature override + thinking budget flow through.
+  const ecfg = opts.temperature != null ? { ...cfg, temperature: opts.temperature } : cfg
   if (window.yapper) {
-    return streamRemote(cfg, messages, onToken, signal, maxTokens)
+    return streamRemote(ecfg, messages, onToken, signal, maxTokens, opts.effort)
   }
-  const res = await chat(cfg, messages)
+  const res = await chat(ecfg, messages)
   if (res.ok && res.text && !signal?.aborted) onToken(res.text)
   return res
 }
@@ -309,10 +324,11 @@ async function streamRemote(
   messages: ChatMessage[],
   onToken: (text: string) => void,
   signal: AbortSignal | undefined,
-  maxTokens: number
+  maxTokens: number,
+  effort?: CleanupEffort
 ): Promise<ChatResult> {
   const id = `s${Date.now()}_${streamSeq++}`
-  const { url, init } = llmRequestShape(cfg, messages, { stream: true, maxTokens })
+  const { url, init } = llmRequestShape(cfg, messages, { stream: true, maxTokens, effort })
   let full = ''
   let settled = false
   return new Promise<ChatResult>((resolve) => {

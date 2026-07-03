@@ -9,7 +9,7 @@
       module init — without it the speech worker throws an EvalError and the model
       never loads). All script is local/bundled, so this stays within an offline app.
     -->
-    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'wasm-unsafe-eval' 'unsafe-eval' blob: http://127.0.0.1:*; img-src 'self' data: blob:; media-src 'self' blob:; style-src 'self' 'unsafe-inline'; frame-src 'self' http: https:; worker-src 'self' blob:; connect-src 'self' blob: data: http://127.0.0.1:* http://localhost:* https://huggingface.co https://*.hf.co https://cdn-lfs.huggingface.co https://cdn-lfs-us-1.hf.co" />
+    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'wasm-unsafe-eval' 'unsafe-eval' blob: http://127.0.0.1:*; img-src 'self' data: blob:; media-src 'self' blob:; style-src 'self' 'unsafe-inline'; frame-src 'self' http: https:; worker-src 'self' blob:; connect-src 'self' blob: data: http://127.0.0.1:* http://localhost:* https://huggingface.co https://*.hf.co https://cdn-lfs.huggingface.co https://cdn-lfs-us-1.hf.co https://raw.githubusercontent.com" />
     <title>Yapper</title>
   </head>
   <body>

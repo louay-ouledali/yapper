@@ -72,13 +72,20 @@ cleanup modes, auto-paste, and how long to keep audio.
 
 ### On-device AI models
 
-Yapper's cleanup runs locally via [wllama](https://github.com/ngxson/wllama) (llama.cpp in WASM). Two tiers,
-each a one-time download:
+Yapper's cleanup runs locally, with two engines behind one **Model** picker in Settings. Each model is a
+one-time download, then works fully offline:
 
-| Tier | Model | Size | Notes |
-| --- | --- | --- | --- |
-| **Compact** | Qwen 2.5 0.5B | ~400 MB | smallest, fastest, runs anywhere |
-| **Balanced** | Qwen 2.5 1.5B | ~1.1 GB | noticeably stronger cleanup, still fully on-device |
+| Tier | Model | Engine | Size | Notes |
+| --- | --- | --- | --- | --- |
+| **Standard** | Qwen 2.5 3B | CPU ([wllama](https://github.com/ngxson/wllama), llama.cpp in WASM) | ~1.9 GB | the zero-setup default — smart cleanup that runs on any machine; downloads on first use |
+| **Turbo** | Qwen 2.5 7B | GPU ([web-llm](https://github.com/mlc-ai/web-llm), WebGPU) | ~4.7 GB | noticeably stronger and much faster on a capable GPU |
+| **Max** | Llama 3.1 8B | GPU (web-llm, WebGPU) | ~6.3 GB | the most capable: best on long transcripts and tricky context |
+
+The **Turbo/Max** GPU tiers need WebGPU; on a machine without a capable GPU they transparently fall back to the
+**Standard** CPU model. GPU models download once from Hugging Face and are then cached and run entirely offline.
+
+Long dictations are cleaned in **chunks and re-joined**, so nothing is dropped no matter how long you talk (a
+single recording is capped — 20 min by default, up to 30 — and auto-stops when it hits the limit).
 
 Prefer your own models? Point Yapper at a local/cloud **Ollama** server or any **OpenAI-compatible** endpoint in Settings.
 

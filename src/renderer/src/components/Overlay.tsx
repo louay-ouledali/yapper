@@ -1,7 +1,8 @@
 import { useEffect, useRef, useState } from 'react'
 import { VoiceRecorder, processAudio, cleanTranscript, type CleanupMode, type DictationResult } from '../lib/dictation'
 import { getTranscriber } from '../lib/whisper-batch'
-import { addHistory, updateHistory, loadSettings, findMode, modePrompt, type YapperSettings } from '../lib/settings'
+import { addHistory, updateHistory, loadSettings, findMode, modePrompt, modeEffort, type YapperSettings } from '../lib/settings'
+import { LLM_TIERS, normalizeTier } from '../lib/llm-shared'
 
 type Phase = 'idle' | 'recording' | 'transcribing' | 'cleaning' | 'done' | 'error' | 'downloading'
 
@@ -49,10 +50,22 @@ export default function Overlay(): JSX.Element {
   const cancelledRef = useRef(false)
   const abortRef = useRef<AbortController | null>(null)
   const pendingRef = useRef<{ id: number; mode: string; label?: string; audioPath?: string } | null>(null)
+  // Auto-stop a recording that hits the configured max length (a forgotten recorder
+  // can't run unbounded). autoStopRef flags it so the result card explains why it ended.
+  const limitTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const autoStopRef = useRef(false)
+  // Accumulates cleaned text as it streams so the pill paints it live; and whether the
+  // transcriber wanted GPU but ran on CPU (so we can tell the user why it felt slow).
+  const cleanLiveRef = useRef('')
+  const downgradedRef = useRef(false)
 
   const clearHide = (): void => {
     if (hideTimer.current) clearTimeout(hideTimer.current)
     hideTimer.current = null
+  }
+  const clearLimit = (): void => {
+    if (limitTimer.current) clearTimeout(limitTimer.current)
+    limitTimer.current = null
   }
   const armHide = (ms = 5000): void => {
     clearHide()
@@ -61,11 +74,15 @@ export default function Overlay(): JSX.Element {
 
   const start = async (modeId: string): Promise<void> => {
     clearHide()
+    clearLimit()
     setResult('')
     setError('')
     setNote('')
     setLoadPct(null)
     cancelledRef.current = false
+    autoStopRef.current = false
+    downgradedRef.current = false
+    cleanLiveRef.current = ''
     pendingRef.current = null
     abortRef.current = null
     modeRef.current = modeId // sync so a fast hold reads the right mode at stop
@@ -75,6 +92,14 @@ export default function Overlay(): JSX.Element {
       await rec.start()
       recRef.current = rec
       setPhase('recording')
+      // Cap the recording length — auto-stop + process when the limit is reached.
+      const mins = Math.min(30, Math.max(1, settingsRef.current?.maxRecordingMinutes ?? 20))
+      limitTimer.current = setTimeout(() => {
+        if (phaseRef.current === 'recording') {
+          autoStopRef.current = true
+          void stopAndProcess()
+        }
+      }, mins * 60_000)
     } catch (e) {
       setError('Microphone unavailable: ' + (e as Error).message)
       setPhase('error')
@@ -84,6 +109,7 @@ export default function Overlay(): JSX.Element {
   const stopAndProcess = async (): Promise<void> => {
     const rec = recRef.current
     if (!rec) return
+    clearLimit()
     recRef.current = null
     const activeMode = modeRef.current
     setPhase('transcribing')
@@ -141,9 +167,23 @@ export default function Overlay(): JSX.Element {
         device: settings.device,
         language: settings.language,
         prompt: modePrompt(settings, activeMode),
-        onPhase: (ph) => setPhase(ph),
+        effort: modeEffort(settings, activeMode),
+        onPhase: (ph) => {
+          setPhase(ph)
+          if (ph === 'cleaning') {
+            cleanLiveRef.current = ''
+            setResult('') // clear so streamed cleaned text paints from empty
+          }
+        },
         onModelProgress: (pct) => setLoadPct(pct),
-        onDevice: (dev) => setEngine(`${modelShort} · ${dev === 'webgpu' ? 'GPU' : 'CPU'}`),
+        onDevice: (dev, downgraded) => {
+          downgradedRef.current = downgraded
+          setEngine(downgraded ? `${modelShort} · CPU (GPU can’t fit it — Base is faster)` : `${modelShort} · ${dev === 'webgpu' ? 'GPU' : 'CPU'}`)
+        },
+        onCleanToken: (t) => {
+          cleanLiveRef.current += t
+          setResult(cleanLiveRef.current)
+        },
         signal: ac.signal
       })
     } catch (e) {
@@ -169,7 +209,15 @@ export default function Overlay(): JSX.Element {
     setTranscript(out.transcript)
     setInserted(didInsert)
     setResult(out.cleaned)
-    setNote(noteFor(out.status, out.error))
+    setNote(
+      [
+        downgradedRef.current ? `Ran on CPU — ${modelShort} is heavy for your GPU; pick Base in Settings for speed.` : '',
+        autoStopRef.current ? `Reached the ${settings.maxRecordingMinutes}-min recording limit — stopped and processed.` : '',
+        noteFor(out.status, out.error)
+      ]
+        .filter(Boolean)
+        .join(' ')
+    )
     setPhase('done')
     armHide()
   }
@@ -190,6 +238,7 @@ export default function Overlay(): JSX.Element {
     cancelledRef.current = true
     abortRef.current?.abort()
     clearHide()
+    clearLimit()
     const settings = settingsRef.current
     const activeMode = modeRef.current
     let audioPath = pendingRef.current?.audioPath
@@ -233,7 +282,15 @@ export default function Overlay(): JSX.Element {
     clearHide()
     setMode(newMode)
     setPhase('cleaning')
-    const r = await cleanTranscript(transcript, s.brain, modePrompt(s, newMode))
+    cleanLiveRef.current = ''
+    setResult('')
+    const r = await cleanTranscript(transcript, s.brain, modePrompt(s, newMode), undefined, {
+      effort: modeEffort(s, newMode),
+      onToken: (t) => {
+        cleanLiveRef.current += t
+        setResult(cleanLiveRef.current)
+      }
+    })
     await window.yapper?.clipboardWrite(r.text)
     if (histIdRef.current != null) await updateHistory(histIdRef.current, { cleaned: r.text, mode: newMode, modeLabel: findMode(s, newMode)?.label })
     setInserted(false)
@@ -247,11 +304,28 @@ export default function Overlay(): JSX.Element {
     void window.yapper?.clipboardWrite(transcript)
   }
 
-  /** Ensure the on-device cleanup model for the chosen tier is downloaded (first run), showing progress. */
+  /** Ensure the on-device cleanup model for the chosen tier is ready (first run), showing progress.
+   *  GPU tiers (web-llm) prepare in the renderer; the CPU 'standard' model downloads via main —
+   *  which also covers the fallback when a GPU tier is selected but no GPU is present. */
   const ensureLocalReady = async (settings: YapperSettings): Promise<void> => {
     if (settings.brain.provider !== 'local' || !settings.brain.enabled) return
-    const tier = settings.brain.localTier ?? 'floor'
-    const st = await window.yapper?.localModelStatus(tier)
+    const t = LLM_TIERS[normalizeTier(settings.brain.localTier)]
+    if (t.engine === 'webllm' && t.webllmModel) {
+      try {
+        const { webLlmAvailable, webLlmHasModel, webLlmPrepare } = await import('../lib/webLlm')
+        if (await webLlmAvailable()) {
+          if (await webLlmHasModel(t.webllmModel)) return
+          setDlPct(0)
+          setPhase('downloading')
+          await webLlmPrepare(t.webllmModel, (pct) => setDlPct(pct))
+          return
+        }
+        // No capable GPU: fall through and ensure the CPU standard model (the fallback engine).
+      } catch {
+        /* fall through to CPU */
+      }
+    }
+    const st = await window.yapper?.localModelStatus('standard')
     if (st?.installed) return
     setDlPct(0)
     setPhase('downloading')
@@ -263,7 +337,7 @@ export default function Overlay(): JSX.Element {
           resolve()
         } else setDlPct(d.pct ?? 0)
       })
-      void window.yapper?.localModelDownload(tier)
+      void window.yapper?.localModelDownload('standard')
     })
   }
 

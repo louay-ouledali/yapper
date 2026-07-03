@@ -68,8 +68,9 @@ export function classifyOpenai(r: { ok: boolean; error?: string }): ConnResult {
 /** Decide the on-device state from the model-install + GPU readiness (pure). */
 export function classifyLocal(installed: boolean, tier: AiBrain['localTier'], gpuHardware: boolean | null): ConnResult {
   if (!installed) return { state: 'not-installed', detail: 'on-device model not downloaded yet' }
-  if (tier === 'balanced' && gpuHardware === false) return { state: 'ok', detail: 'on-device ready (no GPU — uses Compact)' }
-  return { state: 'ok', detail: tier === 'balanced' ? 'on-device ready (GPU)' : 'on-device ready' }
+  const gpuTier = tier === 'turbo' || tier === 'max'
+  if (gpuTier && gpuHardware === false) return { state: 'ok', detail: 'on-device ready (no GPU — uses Standard CPU)' }
+  return { state: 'ok', detail: gpuTier ? 'on-device ready (GPU)' : 'on-device ready' }
 }
 
 /**
@@ -81,13 +82,18 @@ export async function testConnection(b: AiBrain, role: BrainRole = 'live'): Prom
   if (!bridge) return { state: 'unreachable', detail: 'bridge unavailable' }
 
   if (b.provider === 'local') {
-    const st = await bridge.localModelStatus().catch(() => null)
-    let gpu: boolean | null = null
-    if (b.localTier === 'balanced') {
-      const info = await bridge.modelInfo().catch(() => null)
-      gpu = info ? info.gpuHardware : null
+    // GPU tiers (web-llm): ready means a hardware GPU + the model cached in-renderer;
+    // without a GPU they fall back to the CPU 'standard' model, so check that instead.
+    if (b.localTier === 'turbo' || b.localTier === 'max') {
+      const [{ webLlmAvailable, webLlmHasModel }, { LLM_TIERS }] = await Promise.all([import('./webLlm'), import('./llm-shared')])
+      const model = LLM_TIERS[b.localTier].webllmModel
+      const gpu = await webLlmAvailable().catch(() => false)
+      if (gpu && model) return classifyLocal(await webLlmHasModel(model).catch(() => false), b.localTier, true)
+      const st = await bridge.localModelStatus('standard').catch(() => null)
+      return classifyLocal(Boolean(st?.installed), b.localTier, false)
     }
-    return classifyLocal(Boolean(st?.installed), b.localTier, gpu)
+    const st = await bridge.localModelStatus('standard').catch(() => null)
+    return classifyLocal(Boolean(st?.installed), b.localTier, null)
   }
 
   if (b.provider === 'ollama') {

@@ -44,27 +44,24 @@ function wllamaCompatPath(name: string): string | null {
   }
 }
 
-// On-device cleanup models (GGUF, run on CPU via wllama). Each downloads ONCE into
-// userData over the loopback server and loads offline forever after. Two tiers:
-//   floor    — Qwen 0.5B (~400 MB), smallest/fastest, runs anywhere
-//   balanced — Qwen 1.5B (~1.1 GB), stronger cleanup, still fully on-device
+// The on-device CPU cleanup model (GGUF, run via wllama). Downloads ONCE into
+// userData over the loopback server, then loads offline forever after. This is the
+// 'standard' tier and the zero-setup default; the bigger 'turbo'/'max' tiers run on
+// the GPU via web-llm entirely in the renderer (nothing to serve from here).
+//   standard — Qwen2.5 3B (~1.9 GB), smart cleanup that still runs on any CPU
 export const LLM_MODELS = {
-  floor: {
-    file: 'qwen2.5-0.5b-instruct-q4_k_m.gguf',
-    url: 'https://huggingface.co/Qwen/Qwen2.5-0.5B-Instruct-GGUF/resolve/main/qwen2.5-0.5b-instruct-q4_k_m.gguf'
-  },
-  balanced: {
-    file: 'qwen2.5-1.5b-instruct-q4_k_m.gguf',
-    url: 'https://huggingface.co/Qwen/Qwen2.5-1.5B-Instruct-GGUF/resolve/main/qwen2.5-1.5b-instruct-q4_k_m.gguf'
+  standard: {
+    file: 'qwen2.5-3b-instruct-q4_k_m.gguf',
+    url: 'https://huggingface.co/Qwen/Qwen2.5-3B-Instruct-GGUF/resolve/main/qwen2.5-3b-instruct-q4_k_m.gguf'
   }
 } as const
-/** Resolve the model file+url for a tier (defaults to the floor). Guards arbitrary input. */
-export const llmModelFor = (tier?: string): { file: string; url: string } =>
-  tier === 'balanced' ? LLM_MODELS.balanced : LLM_MODELS.floor
+/** Resolve the CPU model file+url. There is only one (the GPU tiers live in the renderer),
+ *  so any tier the main process is asked about resolves to the standard CPU model. */
+export const llmModelFor = (_tier?: string): { file: string; url: string } => LLM_MODELS.standard
 
-// Back-compat aliases (the floor is the zero-setup default).
-export const LLM_MODEL_FILE = LLM_MODELS.floor.file
-export const LLM_MODEL_URL = LLM_MODELS.floor.url
+// Back-compat aliases (the standard CPU model is the zero-setup default).
+export const LLM_MODEL_FILE = LLM_MODELS.standard.file
+export const LLM_MODEL_URL = LLM_MODELS.standard.url
 
 const BUNDLED_MODELS_DIR = app.isPackaged
   ? join(process.resourcesPath, 'resources', 'models')

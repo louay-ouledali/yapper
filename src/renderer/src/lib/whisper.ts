@@ -22,7 +22,7 @@ export type { WhisperCompute } from './whisper-shared'
 export { whisperGenOptions } from './whisper-shared'
 
 export type WhisperDevice = 'auto' | 'webgpu' | 'wasm'
-export const DEFAULT_WHISPER_MODEL = 'onnx-community/whisper-base'
+export const DEFAULT_WHISPER_MODEL = 'onnx-community/whisper-small'
 
 /** Mic frames in the first instants are clicks/AGC settling — don't decode them. */
 const MUTE_IN_S = 0.3

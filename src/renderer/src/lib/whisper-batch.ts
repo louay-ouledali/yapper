@@ -15,8 +15,10 @@ import { DEFAULT_WHISPER_MODEL, type WhisperDevice } from './whisper'
 
 env.allowLocalModels = false
 
+// CPU decode is thread-bound; give it most of the cores (leave one for the UI/mic)
+// so a Small model on the wasm path isn't needlessly throttled.
 const threadCount = (): number =>
-  typeof SharedArrayBuffer !== 'undefined' ? Math.max(1, Math.min(4, Math.floor((navigator.hardwareConcurrency || 2) / 2))) : 1
+  typeof SharedArrayBuffer !== 'undefined' ? Math.max(1, Math.min(8, (navigator.hardwareConcurrency || 2) - 1)) : 1
 
 let ortConfigured = false
 async function configureOrt(): Promise<void> {
@@ -122,6 +124,9 @@ let cached: { key: string; device: 'webgpu' | 'wasm'; pipe: AutomaticSpeechRecog
 /** Final device decision per model — set once so we NEVER re-probe or re-attempt a
  *  device that already failed (the bug that re-ran the 12 s GPU warmup every dictation). */
 const decided = new Map<string, 'webgpu' | 'wasm'>()
+/** Whether a real hardware GPU adapter was seen on the last probe — used to detect a
+ *  "wanted GPU but fell back to CPU" downgrade (e.g. the model's encoder is too big to bind). */
+let gpuSeen = false
 
 async function loadFor(model: string, device: 'webgpu' | 'wasm', warmupMs: number, onProgress?: (pct: number) => void): Promise<AutomaticSpeechRecognitionPipeline> {
   if (device === 'webgpu') {
@@ -146,7 +151,7 @@ export async function getTranscriber(
   devicePref: WhisperDevice = 'auto',
   onProgress?: (pct: number) => void,
   warmupMs = 12000
-): Promise<{ pipe: AutomaticSpeechRecognitionPipeline; device: 'webgpu' | 'wasm' }> {
+): Promise<{ pipe: AutomaticSpeechRecognitionPipeline; device: 'webgpu' | 'wasm'; downgraded: boolean }> {
   await configureOrt()
   const compute = toCompute(devicePref)
 
@@ -156,27 +161,32 @@ export async function getTranscriber(
   else if (decided.has(model)) device = decided.get(model)!
   else {
     const probe = await probeGpu()
+    gpuSeen = probe.maxBinding > 0
     device = resolveWhisperDevice(model, compute, probe.maxBinding)
   }
+  // "Wanted GPU, running on CPU, and a GPU exists" → a downgrade the user should see
+  // (usually the model's encoder is too big to bind on this adapter).
+  const downgraded = compute !== 'cpu' && device === 'wasm' && gpuSeen
 
-  if (cached && cached.key === `${model}@${device}`) return { pipe: cached.pipe, device }
+  if (cached && cached.key === `${model}@${device}`) return { pipe: cached.pipe, device, downgraded }
 
   if (device === 'webgpu') {
     try {
       const pipe = await loadFor(model, 'webgpu', warmupMs, onProgress)
       decided.set(model, 'webgpu')
       cached = { key: `${model}@webgpu`, device: 'webgpu', pipe }
-      return { pipe, device: 'webgpu' }
+      return { pipe, device: 'webgpu', downgraded: false }
     } catch {
       decided.set(model, 'wasm') // GPU failed for this model — never retry it this session
     }
   }
 
-  if (cached && cached.key === `${model}@wasm`) return { pipe: cached.pipe, device: 'wasm' }
+  const downgradedFinal = compute !== 'cpu' && gpuSeen
+  if (cached && cached.key === `${model}@wasm`) return { pipe: cached.pipe, device: 'wasm', downgraded: downgradedFinal }
   const pipe = await loadFor(model, 'wasm', 0, onProgress)
   decided.set(model, 'wasm')
   cached = { key: `${model}@wasm`, device: 'wasm', pipe }
-  return { pipe, device: 'wasm' }
+  return { pipe, device: 'wasm', downgraded: downgradedFinal }
 }
 
 /** Transcribe a Float32Array (mono, 16 kHz) or URL. Returns plain text.
@@ -187,10 +197,10 @@ export async function transcribe(
   devicePref?: WhisperDevice,
   onProgress?: (pct: number) => void,
   language?: string,
-  onDevice?: (device: 'webgpu' | 'wasm') => void
+  onDevice?: (device: 'webgpu' | 'wasm', downgraded: boolean) => void
 ): Promise<string> {
-  const { pipe, device } = await getTranscriber(model, devicePref, onProgress)
-  onDevice?.(device)
+  const { pipe, device, downgraded } = await getTranscriber(model, devicePref, onProgress)
+  onDevice?.(device, downgraded)
   // chunk_length_s makes transformers.js process the WHOLE clip (not just the
   // first 30 s Whisper window); stride overlaps chunks so words aren't lost.
   const genOptions: Record<string, unknown> = {
