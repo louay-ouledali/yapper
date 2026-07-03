@@ -31,9 +31,9 @@ export interface CleanupMode {
   effort?: CleanupEffort
 }
 
-/** Shared tail appended to every mode prompt to keep output clean and proportional. */
-const PROMPT_TAIL =
-  ' Keep the result roughly the same length and structure as the input — do not pad, expand, or add content that was not said. Write in a plain, natural human tone (not flowery or obviously AI). Reply with ONLY the result text — no preamble, no explanation, no quotes, no thinking.'
+/** Shared tail appended to every mode prompt. Kept short on purpose: this text is
+ *  re-processed on every cleanup pass, so a long tail directly adds latency. */
+const PROMPT_TAIL = ' Keep it about the same length as the input — don’t pad or expand. Write plainly. Output ONLY the result text: no preamble, quotes, or notes.'
 
 export const DEFAULT_MODES: CleanupMode[] = [
   {
@@ -41,7 +41,7 @@ export const DEFAULT_MODES: CleanupMode[] = [
     label: 'Clean-up',
     builtin: true,
     prompt:
-      'Clean up this dictation. Remove speech disfluencies only: filler words (um, uh, ah, er, like, you know), false starts, and immediate stutters where a word or fragment is accidentally repeated back-to-back (e.g. "the- the the meeting" → "the meeting"). Do NOT remove words that were said on purpose: keep intentional repetition and emphasis exactly as spoken (e.g. "very very important", "no no no", or a word listed or repeated deliberately like "test, test, test"). Never delete a whole meaningful word or phrase unless it is clearly a filler or an accidental back-to-back stutter — when unsure, keep it. When the speaker clearly corrects themselves, keep only the corrected final version. Fix grammar, capitalization and punctuation, and fix words that are obviously mis-transcribed using the context. Preserve the speaker’s meaning, tone, wording and every distinct point — do not add, summarize, or drop content.'
+      'Clean up this dictated text: remove fillers (um, uh, like) and accidental back-to-back stutters, and fix grammar, punctuation, capitalization and obvious mis-hearings. Keep every point and the speaker’s own wording, tone and meaning — never summarize, add, or drop content. Keep deliberate repetition/emphasis (e.g. "very very", "test, test, test"). If the speaker corrects themselves, keep only the corrected version.'
   },
   {
     id: 'prompt',

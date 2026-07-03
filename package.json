@@ -1,6 +1,6 @@
 {
   "name": "yapper",
-  "version": "0.2.2",
+  "version": "0.2.3",
   "description": "Offline, deliberate voice dictation — record in high quality, then AI-clean it into polished text.",
   "author": "Louay Ouledali",
   "private": true,

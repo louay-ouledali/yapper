@@ -31,6 +31,14 @@ let quitting = false
 app.commandLine.appendSwitch('enable-unsafe-webgpu')
 app.commandLine.appendSwitch('ignore-gpu-blocklist')
 
+// CRITICAL for on-device speed: wllama (CPU cleanup) and ORT-wasm (Whisper) both use
+// worker threads, which require SharedArrayBuffer. On this Electron/Chromium, SAB is
+// gated behind cross-origin isolation and OFF by default — so without this switch the
+// engines ran SINGLE-THREADED (1 of N cores), making cleanup and CPU transcription
+// crawl (and ORT's *threaded* wasm can error). Safe here: we only load our own bundled,
+// trusted renderer, never untrusted cross-origin content.
+app.commandLine.appendSwitch('enable-features', 'SharedArrayBuffer')
+
 // Keep DEV data in its own userData folder so running `npm run dev` never pollutes a
 // real install (both default to %APPDATA%/Yapper and would otherwise share history,
 // recordings and downloaded models). Must run before the app is ready.

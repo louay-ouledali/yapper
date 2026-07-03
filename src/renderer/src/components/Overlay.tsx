@@ -54,9 +54,7 @@ export default function Overlay(): JSX.Element {
   // can't run unbounded). autoStopRef flags it so the result card explains why it ended.
   const limitTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
   const autoStopRef = useRef(false)
-  // Accumulates cleaned text as it streams so the pill paints it live; and whether the
-  // transcriber wanted GPU but ran on CPU (so we can tell the user why it felt slow).
-  const cleanLiveRef = useRef('')
+  // Whether the transcriber wanted GPU but ran on CPU (so we can tell the user why it felt slow).
   const downgradedRef = useRef(false)
 
   const clearHide = (): void => {
@@ -82,7 +80,6 @@ export default function Overlay(): JSX.Element {
     cancelledRef.current = false
     autoStopRef.current = false
     downgradedRef.current = false
-    cleanLiveRef.current = ''
     pendingRef.current = null
     abortRef.current = null
     modeRef.current = modeId // sync so a fast hold reads the right mode at stop
@@ -174,21 +171,11 @@ export default function Overlay(): JSX.Element {
         language: settings.language,
         prompt: modePrompt(settings, activeMode),
         effort: modeEffort(settings, activeMode),
-        onPhase: (ph) => {
-          setPhase(ph)
-          if (ph === 'cleaning') {
-            cleanLiveRef.current = ''
-            setResult('') // clear so streamed cleaned text paints from empty
-          }
-        },
+        onPhase: (ph) => setPhase(ph),
         onModelProgress: (pct) => setLoadPct(pct),
         onDevice: (dev, downgraded) => {
           downgradedRef.current = downgraded
           setEngine(downgraded ? `${modelShort} · CPU (GPU can’t fit it — Base is faster)` : `${modelShort} · ${dev === 'webgpu' ? 'GPU' : 'CPU'}`)
-        },
-        onCleanToken: (t) => {
-          cleanLiveRef.current += t
-          setResult(cleanLiveRef.current)
         },
         signal: ac.signal
       })
@@ -289,15 +276,7 @@ export default function Overlay(): JSX.Element {
     clearHide()
     setMode(newMode)
     setPhase('cleaning')
-    cleanLiveRef.current = ''
-    setResult('')
-    const r = await cleanTranscript(transcript, s.brain, modePrompt(s, newMode), undefined, {
-      effort: modeEffort(s, newMode),
-      onToken: (t) => {
-        cleanLiveRef.current += t
-        setResult(cleanLiveRef.current)
-      }
-    })
+    const r = await cleanTranscript(transcript, s.brain, modePrompt(s, newMode), undefined, { effort: modeEffort(s, newMode) })
     await window.yapper?.clipboardWrite(r.text)
     if (histIdRef.current != null) await updateHistory(histIdRef.current, { cleaned: r.text, mode: newMode, modeLabel: findMode(s, newMode)?.label })
     setInserted(false)
